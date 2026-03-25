@@ -6,8 +6,9 @@ import time
 import os
 from datetime import datetime
 from typing import List, Dict, Tuple, Optional
-from telegram import Update
-from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
+from telegram import Update, Bot
+from telegram.ext import Updater, CommandHandler, CallbackContext
+from telegram.utils.request import Request
 
 import firebase_admin
 from firebase_admin import credentials, db
@@ -344,20 +345,20 @@ def fetch_game_data():
 # TELEGRAM COMMANDS
 # ============================================
 
-async def delete_message(context, chat_id, message_id):
+def delete_message(context, chat_id, message_id):
     try:
-        await context.bot.delete_message(chat_id=chat_id, message_id=message_id)
+        context.bot.delete_message(chat_id=chat_id, message_id=message_id)
     except:
         pass
 
-async def check_access_loop(chat_id, context):
+def check_access_loop(chat_id, context):
     while True:
         device_id = get_or_create_device_id(chat_id)
         if device_id:
             has_access = check_device_access(device_id)
             if has_access and chat_id not in users:
                 if "waiting_msg_id" in users.get(chat_id, {}):
-                    await delete_message(context, chat_id, users[chat_id]["waiting_msg_id"])
+                    delete_message(context, chat_id, users[chat_id]["waiting_msg_id"])
                 
                 users[chat_id] = {
                     "device_id": device_id,
@@ -371,23 +372,23 @@ async def check_access_loop(chat_id, context):
                     "max_streak": 0
                 }
                 
-                await context.bot.send_message(
+                context.bot.send_message(
                     chat_id=chat_id,
                     text=f"✅ *Access Granted!*\n\n🆔 *Device ID:* `{device_id}`\n\n🎯 Bot will start automatically!\n\n📊 *Rules:*\n• Win → Multiplier resets to 1x\n• Loss → Next prediction 3x\n\n❌ To stop: /stop",
                     parse_mode='Markdown'
                 )
                 print(f"✅ Access granted for {chat_id}")
                 break
-        await asyncio.sleep(1)
+        time.sleep(1)
 
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+def start(update: Update, context: CallbackContext):
     user_id = update.effective_chat.id
     user_name = update.effective_user.first_name
     
     device_id = get_or_create_device_id(user_id)
     
     if user_id in users and "multiplier" in users[user_id]:
-        await update.message.reply_text(
+        update.message.reply_text(
             f"✅ *Bot is already active!*\n\n🆔 *Device ID:* `{device_id}`",
             parse_mode='Markdown'
         )
@@ -407,12 +408,12 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "loss_streak": 0,
             "max_streak": 0
         }
-        await update.message.reply_text(
+        update.message.reply_text(
             f"✅ *Access Granted!*\n\n🆔 *Device ID:* `{device_id}`\n\n🎯 Bot will start automatically!",
             parse_mode='Markdown'
         )
     else:
-        sent_msg = await update.message.reply_text(
+        sent_msg = update.message.reply_text(
             f"🔐 *Welcome {user_name}!*\n\n"
             f"🆔 *Your Device ID:*\n`{device_id}`\n\n"
             f"⏳ *Waiting for access...*\n\n"
@@ -425,13 +426,14 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         
         users[user_id] = {"waiting_msg_id": sent_msg.message_id}
-        asyncio.create_task(check_access_loop(user_id, context))
+        import threading
+        threading.Thread(target=check_access_loop, args=(user_id, context), daemon=True).start()
 
-async def stop(update: Update, context: ContextTypes.DEFAULT_TYPE):
+def stop(update: Update, context: CallbackContext):
     user_id = update.effective_chat.id
     if user_id in users:
         del users[user_id]
-    await update.message.reply_text(
+    update.message.reply_text(
         f"❌ *Bot Stopped!*\n\nSend /start to activate again.",
         parse_mode='Markdown'
     )
@@ -440,7 +442,7 @@ async def stop(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # MAIN CYCLE - EXACT MINUTE TIMING
 # ============================================
 
-async def process_cycle(context: ContextTypes.DEFAULT_TYPE):
+def process_cycle(context: CallbackContext):
     global last_processed_minute
     
     current_time = datetime.now()
@@ -555,15 +557,15 @@ async def process_cycle(context: ContextTypes.DEFAULT_TYPE):
                 try:
                     if is_win and os.path.exists("win.jpg"):
                         with open("win.jpg", "rb") as img:
-                            await context.bot.send_photo(user_id, photo=img, caption=caption, parse_mode='Markdown')
+                            context.bot.send_photo(user_id, photo=img, caption=caption, parse_mode='Markdown')
                     elif not is_win and os.path.exists("loss.jpg"):
                         with open("loss.jpg", "rb") as img:
-                            await context.bot.send_photo(user_id, photo=img, caption=caption, parse_mode='Markdown')
+                            context.bot.send_photo(user_id, photo=img, caption=caption, parse_mode='Markdown')
                     else:
-                        await context.bot.send_message(user_id, caption, parse_mode='Markdown')
+                        context.bot.send_message(user_id, caption, parse_mode='Markdown')
                 except Exception as e:
                     print(f"Error sending result: {e}")
-                    await context.bot.send_message(user_id, caption, parse_mode='Markdown')
+                    context.bot.send_message(user_id, caption, parse_mode='Markdown')
                 
                 sent_results[result_key] = True
                 print(f"✅ RESULT SENT for period {current_display}")
@@ -606,15 +608,15 @@ async def process_cycle(context: ContextTypes.DEFAULT_TYPE):
             try:
                 if prediction == "BIG" and os.path.exists("big.jpg"):
                     with open("big.jpg", "rb") as img:
-                        await context.bot.send_photo(user_id, photo=img, caption=caption, parse_mode='Markdown')
+                        context.bot.send_photo(user_id, photo=img, caption=caption, parse_mode='Markdown')
                 elif prediction == "SMALL" and os.path.exists("small.jpg"):
                     with open("small.jpg", "rb") as img:
-                        await context.bot.send_photo(user_id, photo=img, caption=caption, parse_mode='Markdown')
+                        context.bot.send_photo(user_id, photo=img, caption=caption, parse_mode='Markdown')
                 else:
-                    await context.bot.send_message(user_id, caption, parse_mode='Markdown')
+                    context.bot.send_message(user_id, caption, parse_mode='Markdown')
             except Exception as e:
                 print(f"Error sending prediction: {e}")
-                await context.bot.send_message(user_id, caption, parse_mode='Markdown')
+                context.bot.send_message(user_id, caption, parse_mode='Markdown')
             
             sent_predictions[prediction_key] = True
             print(f"✅ PREDICTION SENT: {prediction} for period {next_display}")
@@ -626,7 +628,7 @@ async def process_cycle(context: ContextTypes.DEFAULT_TYPE):
 # CLEANUP TASK - PREVENT MEMORY LEAK
 # ============================================
 
-async def cleanup_task(context: ContextTypes.DEFAULT_TYPE):
+def cleanup_task(context: CallbackContext):
     global sent_results, sent_predictions
     
     # Keep only last 200 entries
@@ -641,7 +643,7 @@ async def cleanup_task(context: ContextTypes.DEFAULT_TYPE):
 # MAIN
 # ============================================
 
-async def main():
+def main():
     print("=" * 70)
     print("🤖 WIN MAX BOT - FULLY FIXED PRODUCTION VERSION")
     print("=" * 70)
@@ -662,15 +664,16 @@ async def main():
     
     print("=" * 70)
     
-    # Build application
-    app = ApplicationBuilder().token(TOKEN).build()
+    # Create updater
+    updater = Updater(token=TOKEN, use_context=True)
+    dp = updater.dispatcher
     
     # Add command handlers
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("stop", stop))
+    dp.add_handler(CommandHandler("start", start))
+    dp.add_handler(CommandHandler("stop", stop))
     
     # Add job queue
-    job_queue = app.job_queue
+    job_queue = updater.job_queue
     if job_queue:
         # Check every second for minute change
         job_queue.run_repeating(process_cycle, interval=1, first=1)
@@ -685,11 +688,9 @@ async def main():
     print("📊 Output: 1 Result + 1 Prediction per minute")
     print("=" * 70)
     
-    await app.initialize()
-    await app.start()
-    await app.updater.start_polling()
-    
-    await asyncio.Event().wait()
+    # Start the bot
+    updater.start_polling()
+    updater.idle()
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    main()
